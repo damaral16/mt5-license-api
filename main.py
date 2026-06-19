@@ -1,22 +1,20 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 import psycopg2
-from psycopg2 import pool
 import os
 
 app = FastAPI()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-db_pool = psycopg2.pool.SimpleConnectionPool(
-    1, 10,
-    DATABASE_URL
-)
-
 
 class LicenseRequest(BaseModel):
     license_key: str
     account: str
+
+
+def get_conn():
+    return psycopg2.connect(DATABASE_URL)
 
 
 @app.get("/")
@@ -25,9 +23,9 @@ def home():
 
 
 @app.post("/validate")
-def validate_license(req: LicenseRequest):
+def validate(req: LicenseRequest):
 
-    conn = db_pool.getconn()
+    conn = get_conn()
     cur = conn.cursor()
 
     try:
@@ -80,4 +78,4 @@ def validate_license(req: LicenseRequest):
         return {"status": "error", "detail": str(e)}
 
     finally:
-        db_pool.putconn(conn)
+        conn.close()
