@@ -1,3 +1,10 @@
+@app.get("/debug")
+def debug():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT table_name FROM information_schema.tables;")
+    return cur.fetchall()
+
 from fastapi import FastAPI
 from pydantic import BaseModel
 import psycopg2
