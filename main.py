@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
 import psycopg2
 import os
@@ -6,7 +6,7 @@ import os
 app = FastAPI()
 
 # =========================
-# DATABASE CONNECTION
+# DATABASE
 # =========================
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -18,7 +18,7 @@ def get_conn():
     return psycopg2.connect(DATABASE_URL)
 
 # =========================
-# MODELS
+# REQUEST MODEL
 # =========================
 
 class LicenseRequest(BaseModel):
@@ -26,7 +26,7 @@ class LicenseRequest(BaseModel):
     account: str
 
 # =========================
-# HEALTH CHECK
+# ROOT TEST
 # =========================
 
 @app.get("/")
@@ -38,16 +38,16 @@ def home():
 # =========================
 
 @app.post("/validate")
-def validate_license(data: LicenseRequest):
+def validate(data: LicenseRequest):
 
     conn = get_conn()
     cur = conn.cursor()
 
     try:
-        # 1. check license
+        # 1. CHECK LICENSE
         cur.execute("""
             SELECT max_accounts, status
-            FROM licenses
+            FROM "Licences"
             WHERE license_key = %s
         """, (data.license_key,))
 
@@ -61,30 +61,31 @@ def validate_license(data: LicenseRequest):
         if status != "active":
             return {"status": "inactive"}
 
-        # 2. check accounts already linked
+        # 2. COUNT ACCOUNTS
         cur.execute("""
             SELECT COUNT(*)
-            FROM license_accounts
+            FROM "Licence_accounts"
             WHERE license_key = %s
         """, (data.license_key,))
 
         count = cur.fetchone()[0]
 
-        # 3. check if account already exists
+        # 3. CHECK IF ACCOUNT EXISTS
         cur.execute("""
             SELECT 1
-            FROM license_accounts
+            FROM "Licence_accounts"
             WHERE license_key = %s AND account = %s
         """, (data.license_key, data.account))
 
-        already_linked = cur.fetchone()
+        exists = cur.fetchone()
 
-        if not already_linked:
+        # 4. INSERT IF NEW
+        if not exists:
             if count >= max_accounts:
                 return {"status": "limit_reached"}
 
             cur.execute("""
-                INSERT INTO license_accounts (license_key, account)
+                INSERT INTO "Licence_accounts" (license_key, account)
                 VALUES (%s, %s)
             """, (data.license_key, data.account))
 
@@ -101,7 +102,7 @@ def validate_license(data: LicenseRequest):
         conn.close()
 
 # =========================
-# DEBUG ROUTE (IMPORTANT)
+# DEBUG TABLES
 # =========================
 
 @app.get("/debug")
