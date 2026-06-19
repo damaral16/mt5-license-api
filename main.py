@@ -1,29 +1,44 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import psycopg2
 import os
 
 app = FastAPI()
 
+# =========================
+# DATABASE CONNECTION
+# =========================
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+def get_conn():
+    if not DATABASE_URL:
+        raise Exception("DATABASE_URL not set")
+
+    return psycopg2.connect(DATABASE_URL)
+
+# =========================
+# MODELS
+# =========================
 
 class LicenseRequest(BaseModel):
     license_key: str
     account: str
 
-
-def get_conn():
-    return psycopg2.connect(DATABASE_URL, sslmode="require")
-
+# =========================
+# HEALTH CHECK
+# =========================
 
 @app.get("/")
 def home():
     return {"status": "ok"}
 
+# =========================
+# VALIDATE LICENSE
+# =========================
 
 @app.post("/validate")
-def validate(req: LicenseRequest):
+def validate_license(data: LicenseRequest):
 
     conn = get_conn()
     cur = conn.cursor()
@@ -31,65 +46,79 @@ def validate(req: LicenseRequest):
     try:
         # 1. check license
         cur.execute("""
-            SELECT max_accounts, status, expires_at
+            SELECT max_accounts, status
             FROM licenses
             WHERE license_key = %s
-        """, (req.license_key,))
+        """, (data.license_key,))
 
-        data = cur.fetchone()
+        license_row = cur.fetchone()
 
-        if not data:
+        if not license_row:
             return {"status": "invalid"}
 
-        max_accounts, status, expires_at = data
+        max_accounts, status = license_row
 
         if status != "active":
-            return {"status": "suspended"}
+            return {"status": "inactive"}
 
-        # 2. check expiration
-        if expires_at and str(expires_at) < "2026-01-01":
-            return {"status": "expired"}
-
-        # 3. check accounts
+        # 2. check accounts already linked
         cur.execute("""
             SELECT COUNT(*)
             FROM license_accounts
             WHERE license_key = %s
-        """, (req.license_key,))
+        """, (data.license_key,))
 
         count = cur.fetchone()[0]
 
-        # 4. check if account exists
+        # 3. check if account already exists
         cur.execute("""
             SELECT 1
             FROM license_accounts
             WHERE license_key = %s AND account = %s
-        """, (req.license_key, req.account))
+        """, (data.license_key, data.account))
 
-        exists = cur.fetchone()
+        already_linked = cur.fetchone()
 
-        # 5. register account if new
-        if not exists:
+        if not already_linked:
             if count >= max_accounts:
-                return {"status": "max_accounts_reached"}
+                return {"status": "limit_reached"}
 
             cur.execute("""
                 INSERT INTO license_accounts (license_key, account)
                 VALUES (%s, %s)
-            """, (req.license_key, req.account))
+            """, (data.license_key, data.account))
 
             conn.commit()
 
         return {"status": "active"}
 
     except Exception as e:
+        conn.rollback()
         return {"status": "error", "detail": str(e)}
 
     finally:
+        cur.close()
         conn.close()
-        @app.get("/debug")
+
+# =========================
+# DEBUG ROUTE (IMPORTANT)
+# =========================
+
+@app.get("/debug")
 def debug():
+
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT table_name FROM information_schema.tables;")
-    return cur.fetchall()
+
+    cur.execute("""
+        SELECT table_schema, table_name
+        FROM information_schema.tables
+        ORDER BY table_schema, table_name;
+    """)
+
+    tables = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return {"tables": tables}
