@@ -14,7 +14,7 @@ class LicenseRequest(BaseModel):
 
 
 def get_conn():
-    return psycopg2.connect(DATABASE_URL)
+    return psycopg2.connect(DATABASE_URL, sslmode="require")
 
 
 @app.get("/")
@@ -29,22 +29,28 @@ def validate(req: LicenseRequest):
     cur = conn.cursor()
 
     try:
+        # 1. check license
         cur.execute("""
-            SELECT max_accounts, status
+            SELECT max_accounts, status, expires_at
             FROM licenses
             WHERE license_key = %s
         """, (req.license_key,))
 
-        license_data = cur.fetchone()
+        data = cur.fetchone()
 
-        if not license_data:
+        if not data:
             return {"status": "invalid"}
 
-        max_accounts, status = license_data
+        max_accounts, status, expires_at = data
 
         if status != "active":
             return {"status": "suspended"}
 
+        # 2. check expiration
+        if expires_at and str(expires_at) < "2026-01-01":
+            return {"status": "expired"}
+
+        # 3. check accounts
         cur.execute("""
             SELECT COUNT(*)
             FROM license_accounts
@@ -53,6 +59,7 @@ def validate(req: LicenseRequest):
 
         count = cur.fetchone()[0]
 
+        # 4. check if account exists
         cur.execute("""
             SELECT 1
             FROM license_accounts
@@ -61,6 +68,7 @@ def validate(req: LicenseRequest):
 
         exists = cur.fetchone()
 
+        # 5. register account if new
         if not exists:
             if count >= max_accounts:
                 return {"status": "max_accounts_reached"}
